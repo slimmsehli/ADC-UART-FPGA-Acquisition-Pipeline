@@ -77,6 +77,35 @@ module top;
 		);
 		
 		// =========================================================================
+    // FIFO
+    // =========================================================================
+    parameter DATA_WIDTH = 10;
+    parameter ADDR_WIDTH = 100;
+		wire fifo_full;
+		reg w_en;
+		reg [DATA_WIDTH-1:0] wdata;
+		async_fifo #(
+		  .DATA_WIDTH(DATA_WIDTH), //parameter DATA_WIDTH = 10,
+		  .ADDR_WIDTH(ADDR_WIDTH) //parameter ADDR_WIDTH = 4 // 2^4 = 16 locations
+		)
+			fifo
+		(
+				// Write Domain (60MHz)
+				.wclk(clk_60), //input  wire                   wclk,
+				.wrst_n(reset), //input  wire                   wrst_n,
+				.w_en(w_en), //input  wire                   w_en,
+				.wdata(wdata), //input  wire [DATA_WIDTH-1:0]  wdata,
+				.full(fifo_full), //output wire                   full,
+
+				// Read Domain (100MHz)
+				.rclk(), //input  wire                   rclk,
+				.rrst_n(), //input  wire                   rrst_n,
+				.r_en(), //input  wire                   r_en,
+				.rdata(), //output wire [DATA_WIDTH-1:0]  rdata,
+				.empty() //output wire                   empty
+		);
+		
+		// =========================================================================
     // Memory Management for data 
     // =========================================================================
 		// logic part to enable the capture of 10000 value and put them into memory 
@@ -98,6 +127,8 @@ module top;
 				case (mem_status)
 					IDLE: begin // nothing just sit there waiting for the aquire signal
 						hypermem_fifo_counter <= 0;
+						wdata <= 0;
+						w_en <= 0;
 						if (cmd_acquire) begin
 							// need to implment a waiting state until the adc wakes up
 							enable_adc <= 1; 
@@ -105,11 +136,14 @@ module top;
 						end
 					end 
 					READ: begin
-						hypermem_fifo[hypermem_fifo_counter] <= adc_data;
+						wdata <= adc_data;
+						w_en <= 1;
 						hypermem_fifo_counter <= hypermem_fifo_counter + 1;
 						if (hypermem_fifo_counter>adc_values_packet) begin
 							mem_status <= IDLE;
 							enable_adc <= 0; //disable the adc after 10k values captured
+							w_en <= 0; // disbale the fifo write 
+							wdata <= 0;
 						end
 					end
 					default: mem_status <= IDLE;
