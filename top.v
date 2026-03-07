@@ -1,5 +1,3 @@
-
-
 module top;
 		parameter CLK_PERIOD = 10;
     parameter MAX_CYCLES = 500_000_000;
@@ -11,29 +9,7 @@ module top;
     localparam UART_HALF = 434;
     localparam UART_FULL = 868;
     
-    // =========================================================================
-    // ADC 
-    // =========================================================================
-    parameter CLK_PERIOD_adc = 17; // 60MHz = 16ps period
-    reg clk_adc    = 0;
-    always #(CLK_PERIOD_adc/2) clk_adc = ~clk_adc;
-    reg  [9:0] adc_data;
-    reg enable_adc;
-    adc adc_i (
-		  .enable(enable_adc),
-		  .adc_data(adc_data) //reg  [9:0] 
-    );
-    initial begin 
-    	enable_adc = 0;
-    	repeat(10) @(posedge clk_adc);
-    	enable_adc = 1;
-    	//$finish;
-    end
-    
-    
-    // =========================================================================
-    //UART
-    // =========================================================================
+    // parametrs and signals ofr the UART
     parameter CLK_FREQUENCY = 100_000_000; // (MHz) FPGA clock : 100MHz
     parameter CLK_PERIOD_main = 10 ; // 10ps
     parameter BAUD_RATE  = 9600; //19200, 115200;
@@ -46,125 +22,28 @@ module top;
     reg uart_rx;
     reg  [7:0]  rx_byte_out;
     wire rx_done_tick;
-    
-    /*uart uart_i (
-		  .clk(clk_main), //input  wire        clk,
-		  .rst_n(reset), //input  wire        rst_n,
-		  // Configuration Registers
-		  .clks_per_bit(baudrate), //input  wire [15:0] clks_per_bit(baudrate),
-		  // Physical Lines
-		  .uart_rx(uart_rx),
-		  .uart_tx(uart_tx),
-		  // Internal Interface
-		  .rx_byte_out(rx_byte_out), //output reg  [7:0]  rx_byte_out,
-		  .rx_done_tick(rx_done_tick) //output reg         rx_done_tick,
-		  //.tx_byte_in(tx_byte_in), //input  wire [7:0]  tx_byte_in,
-		  //.(tx_start) //input  wire        tx_start
-		);*/
-    
+    wire         cmd_acquire;
+    wire         cmd_read;    
     reg [7:0] command_list [0:3];
     integer i;
-    // --- Task to simulate a PC sending a byte ---
-    task send_uart_byte(input [7:0] data);
-        integer bit_idx;
-        begin
-            // Start Bit (Low)
-            uart_rx = 0;
-            #(BIT_PERIOD);
-            
-            // Data Bits (LSB first)
-            for (bit_idx = 0; bit_idx < 8; bit_idx = bit_idx + 1) begin
-                uart_rx = data[bit_idx];
-                #(BIT_PERIOD);
-            end
-            
-            // Stop Bit (High)
-            uart_rx = 1;
-            #(BIT_PERIOD);
-            
-            $display("[TB] Sent Byte: %h ('%c') at time %t", data, data, $time);
-        end
-    endtask
-    
-    initial begin
-    $display("=================================================");
-    $display("[TB]   ADC AQUISITION  ");
-    $display("[TB]   FPGA CLOCK : 100MHz  ");
-    $display("[TB]   ADC CLOCK : 60MHz  ");
-    $display("[TB]   UART BAUDRATE : %d  ", BAUD_RATE);
-    $display("=================================================");
-    $display("[TB] 	 Simulation Finished");
-    reset = 0;
-    uart_rx = 1;
-    baudrate = CPB;
-    // Populate Command List
-    command_list[0] = 8'h61; // 'a' (Acquire)
-    command_list[1] = 8'h72; // 'r' (Read)
-    command_list[2] = 8'h73; // 's' (Status)
-    command_list[3] = 8'h74; // 't' (Test)
-    
-    // Reset the System
-    #(CLK_PERIOD_main * 10);
-    reset = 1;
-    #(CLK_PERIOD_main * 10);
-    
-    // --- Test "acquire" ---
-    send_uart_byte(8'h61); // a
-    send_uart_byte(8'h63); // c
-    send_uart_byte(8'h71); // q
-    send_uart_byte(8'h75); // u
-    send_uart_byte(8'h69); // i
-    send_uart_byte(8'h72); // r
-    send_uart_byte(8'h65); // e
-    send_uart_byte(8'h20); // SPACE (Triggers the command)
-    
-    #(BIT_PERIOD * 20); // Wait for processing
-
-    // --- Test "read" ---
-    send_uart_byte(8'h72); // r
-    send_uart_byte(8'h65); // e
-    send_uart_byte(8'h61); // a
-    send_uart_byte(8'h64); // d
-    send_uart_byte(8'h20); // SPACE
-
-    #(BIT_PERIOD * 10);
-    $display("[TB] Simulation Finished");
-    $finish;
-    end
-    
-    // Monitor the Output
-    /*always @(posedge clk) begin
-        if (rx_done_tick) begin
-            $display("[DUT] Received Flag High! Data on Bus: %h", rx_byte_out);
-        end
-    end*/
     
     // =========================================================================
-    // CLI decoder
+    // ADC : a dummy ADC that generates a  signal at 10 bits at 60MHz 
     // =========================================================================
-    reg         cmd_acquire;
-    reg         cmd_read;
+    parameter CLK_PERIOD_adc = 17; // 60MHz = 16ps period
+    reg clk_adc    = 0;
+    always #(CLK_PERIOD_adc/2) clk_adc = ~clk_adc;
+    reg  [9:0] adc_data;
+    reg enable_adc;
+    adc adc_i (
+		  .enable(enable_adc),
+		  .adc_data(adc_data) //reg  [9:0] 
+    );
     
-    /*cli_decoder cli_decoder_i (
-		  .clk(clk_main), //input  wire        clk,
-		  .rst_n(reset), //input  wire        rst_n,
-		  .rx_byte(rx_byte_out), //input  wire [7:0]  rx_byte,      // From your UART rx_byte_out
-		  .rx_done_tick(rx_done_tick), //input  wire        rx_done_tick, // From your UART rx_done_tick
-		  .cmd_acquire(cmd_acquire), //output reg         cmd_start,
-		  .cmd_read(cmd_read) //output reg         cmd_stop
-		);
-    
-    // Monitor the Output of the decoder
-    always @(posedge clk) begin
-        if (cmd_acquire) begin
-            $display("[DECODER] Received word 'acquire' from decoder");
-        end
-        if (cmd_read) begin
-            $display("[DECODER] Received word 'read' from decoder");
-        end
-    end*/
-    
-    
+    // =========================================================================
+    // UART with decoder
+    // =========================================================================
+
     uart_decoder_top uart_decoder_top_i (
 			.clk(clk_main), //input  wire        clk,
 			.rst_n(reset), //input  wire        rst_n,
@@ -182,6 +61,92 @@ module top;
 		  .cmd_acquire(cmd_acquire), //output reg         cmd_start,
 		  .cmd_read(cmd_read) //output reg         cmd_stop
 		);
+		
+		// logic to activate or not the ADC based on the UART signals 
+		always @(posedge clk) begin
+			if (cmd_acquire)
+				enable_adc = 1'b1;
+			
+			if (cmd_read)
+				enable_adc = 1'b0;
+		end
+		
+		
+    
+    
+    // =========================================================================
+    // TB
+    // =========================================================================
+    
+    // UART TX task 
+    task send_uart_byte(input [7:0] data);
+        integer bit_idx;
+        begin
+            // Start Bit (Low)
+            uart_rx = 0;
+            #(BIT_PERIOD);
+            
+            // Data Bits (LSB first)
+            for (bit_idx = 0; bit_idx < 8; bit_idx = bit_idx + 1) begin
+                uart_rx = data[bit_idx];
+                #(BIT_PERIOD);
+            end
+            
+            // Stop Bit (High)
+            uart_rx = 1;
+            #(BIT_PERIOD);
+            `print("TB", $sformatf("Sent Byte: %h ('%c') ", data, data))
+        end
+    endtask
+    
+    initial begin
+		  $display("=================================================");
+		  $display("[TB]   ADC AQUISITION  ");
+		  $display("[TB]   FPGA CLOCK : 100MHz  ");
+		  $display("[TB]   ADC CLOCK : 60MHz  ");
+		  $display("[TB]   UART BAUDRATE : %d  ", BAUD_RATE);
+		  $display("=================================================");
+		  reset = 0;
+		  uart_rx = 1;
+		  baudrate = CPB;
+		  // Populate Command List
+		  command_list[0] = 8'h61; // 'a' (Acquire)
+		  command_list[1] = 8'h72; // 'r' (Read)
+		  command_list[2] = 8'h73; // 's' (Status)
+		  command_list[3] = 8'h74; // 't' (Test)
+		  
+		  // Reset the System
+		  #(CLK_PERIOD_main * 10);
+		  reset = 1;
+		  #(CLK_PERIOD_main * 10);
+		  
+		  // --- Test "acquire" ---
+		  send_uart_byte(8'h61); // a
+		  send_uart_byte(8'h63); // c
+		  send_uart_byte(8'h71); // q
+		  send_uart_byte(8'h75); // u
+		  send_uart_byte(8'h69); // i
+		  send_uart_byte(8'h72); // r
+		  send_uart_byte(8'h65); // e
+		  send_uart_byte(8'h20); // SPACE (Triggers the command)
+		  
+		  #(BIT_PERIOD * 20); // Wait for processing
+
+		  // --- Test "read" ---
+		  send_uart_byte(8'h72); // r
+		  send_uart_byte(8'h65); // e
+		  send_uart_byte(8'h61); // a
+		  send_uart_byte(8'h64); // d
+		  send_uart_byte(8'h20); // SPACE
+
+		  #(BIT_PERIOD * 10);
+		  $display("=================================================");
+		  $display("[TB] Simulation Finished");
+		  $display("=================================================");
+		  $finish;
+    end
+    
+    
     
     
     

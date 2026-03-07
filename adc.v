@@ -18,4 +18,9 @@ module adc (
         	temp_data <= 0;
     end
     assign adc_data = temp_data;
+    
+    // Monitor the Output
+    always @(posedge enable) `print("ADC", $sformatf("ADC Enabled"))
+    always @(negedge enable) `print("ADC", $sformatf("ADC Disabled"))
+    
 endmodule

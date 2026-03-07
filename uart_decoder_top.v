@@ -41,7 +41,8 @@ module uart_decoder_top (
 		// Monitor the Output
     always @(posedge clk) begin
         if (rx_done_tick) begin
-            $display("[UART] Received Flag High! Data on Bus: %h", rx_byte_out);
+        	`print("UART", $sformatf("Received Flag High! Data on Bus: %h", rx_byte_out))
+           //$display("[UART] Received Flag High! Data on Bus: %h", rx_byte_out);
         end
     end
 
@@ -62,10 +63,12 @@ module uart_decoder_top (
     // Monitor the Output of the decoder
     always @(posedge clk) begin
         if (cmd_acquire) begin
-            $display("[UART] Received word 'acquire' from decoder");
+        	`print("UART", $sformatf("Received word 'acquire' from decoder"))
+            //$display("[UART] Received word 'acquire' from decoder");
         end
         if (cmd_read) begin
-            $display("[UART] Received word 'read' from decoder");
+        	`print("UART", $sformatf("Received word 'read' from decoder"))
+            //$display("[UART] Received word 'read' from decoder");
         end
     end
 
