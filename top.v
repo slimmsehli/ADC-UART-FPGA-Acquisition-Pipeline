@@ -9,15 +9,28 @@ module top;
     localparam UART_HALF = 434;
     localparam UART_FULL = 868;
     
+    // clocks 
+    parameter CLK100_FREQUENCY = 100_000_000; // (MHz) FPGA clock : 100MHz
+    parameter CLK100_PERIOD = 10 ; // 10ps
+    parameter CLK60_FREQUENCY = 60_000_000; 
+    parameter CLK60_PERIOD = 16.66 ; 
+    
     // parametrs and signals ofr the UART
-    parameter CLK_FREQUENCY = 100_000_000; // (MHz) FPGA clock : 100MHz
-    parameter CLK_PERIOD_main = 10 ; // 10ps
     parameter BAUD_RATE  = 9600; //19200, 115200;
-    parameter CPB  = CLK_FREQUENCY / BAUD_RATE ; //868;   // 100MHz / 115200
-    parameter BIT_PERIOD  = CPB * CLK_PERIOD_main;
-    reg clk_main    = 0;
+    parameter CPB  = CLK100_FREQUENCY / BAUD_RATE ; //868;   // 100MHz / 115200
+    parameter BIT_PERIOD  = CPB * CLK100_PERIOD;
+    
+    
+    
+    
+    // clocks
+    reg clk_100    = 0;
+    always #(CLK100_PERIOD/2) clk_100 <= ~clk_100;
+    reg clk_60    = 0;
+    always #(CLK60_PERIOD/2) clk_60 <= ~clk_60;
+    
+    // others signals
     reg reset;
-    always #(CLK_PERIOD_main/2) clk_main = ~clk_main;
     reg [15:0] baudrate;
     reg uart_rx;
     reg  [7:0]  rx_byte_out;
@@ -35,6 +48,7 @@ module top;
     always #(CLK_PERIOD_adc/2) clk_adc = ~clk_adc;
     reg  [9:0] adc_data;
     reg enable_adc;
+    
     adc adc_i (
 		  .enable(enable_adc),
 		  .adc_data(adc_data) //reg  [9:0] 
@@ -45,7 +59,7 @@ module top;
     // =========================================================================
 
     uart_decoder_top uart_decoder_top_i (
-			.clk(clk_main), //input  wire        clk,
+			.clk(clk_100), //input  wire        clk,
 			.rst_n(reset), //input  wire        rst_n,
 			// Configuration Registers
 			.clks_per_bit(baudrate), //input  wire [15:0] clks_per_bit(baudrate),
@@ -62,15 +76,46 @@ module top;
 		  .cmd_read(cmd_read) //output reg         cmd_stop
 		);
 		
-		// logic to activate or not the ADC based on the UART signals 
-		always @(posedge clk) begin
-			if (cmd_acquire)
-				enable_adc = 1'b1;
-			
-			if (cmd_read)
-				enable_adc = 1'b0;
-		end
+		// =========================================================================
+    // Memory Management for data 
+    // =========================================================================
+		// logic part to enable the capture of 10000 value and put them into memory 
+		// memory to hold the 10k values at 10 bits 
+		parameter adc_values_packet = 10000;
+		reg [15:0] hypermem_fifo [adc_values_packet];
+		reg [2:0] mem_status;
+		reg [15:0] hypermem_fifo_counter;
 		
+		typedef enum {IDLE= 3'b000, READ= 3'b001, CONVERT= 3'b010, WRITE= 3'b011} status;
+		
+		always @(posedge clk_60 or negedge reset) begin
+			if (!reset) begin
+				enable_adc<=0;
+				mem_status <= IDLE;
+				hypermem_fifo_counter <= 0;
+			end
+				else begin
+				case (mem_status)
+					IDLE: begin // nothing just sit there waiting for the aquire signal
+						hypermem_fifo_counter <= 0;
+						if (cmd_acquire) begin
+							// need to implment a waiting state until the adc wakes up
+							enable_adc <= 1; 
+							mem_status <= READ;
+						end
+					end 
+					READ: begin
+						hypermem_fifo[hypermem_fifo_counter] <= adc_data;
+						hypermem_fifo_counter <= hypermem_fifo_counter + 1;
+						if (hypermem_fifo_counter>adc_values_packet) begin
+							mem_status <= IDLE;
+							enable_adc <= 0; //disable the adc after 10k values captured
+						end
+					end
+					default: mem_status <= IDLE;
+				endcase
+			end
+		end
 		
     
     
@@ -116,9 +161,9 @@ module top;
 		  command_list[3] = 8'h74; // 't' (Test)
 		  
 		  // Reset the System
-		  #(CLK_PERIOD_main * 10);
+		  #(CLK100_PERIOD * 10);
 		  reset = 1;
-		  #(CLK_PERIOD_main * 10);
+		  #(CLK100_PERIOD * 10);
 		  
 		  // --- Test "acquire" ---
 		  send_uart_byte(8'h61); // a
