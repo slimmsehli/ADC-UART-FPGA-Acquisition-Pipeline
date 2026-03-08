@@ -1,15 +1,6 @@
 module top;
-		parameter CLK_PERIOD = 10;
-    parameter MAX_CYCLES = 500_000_000;
-    parameter GPIO_COUNT = 16;
-    parameter MEM_WORDS  = 32768;
-    parameter VERBOSE    = 0;
     
-    // Bit periods at 115200 baud / 100 MHz clock
-    localparam UART_HALF = 434;
-    localparam UART_FULL = 868;
-    
-    // clocks 
+    // clocks parameters 
     parameter CLK100_FREQUENCY = 100_000_000; // (MHz) FPGA clock : 100MHz
     parameter CLK100_PERIOD = 10 ; // 10ps
     parameter CLK60_FREQUENCY = 60_000_000; 
@@ -19,9 +10,13 @@ module top;
     parameter BAUD_RATE  = 9600; //19200, 115200;
     parameter CPB  = CLK100_FREQUENCY / BAUD_RATE ; //868;   // 100MHz / 115200
     parameter BIT_PERIOD  = CPB * CLK100_PERIOD;
-    
-    
-    
+    parameter UART_HALF = CPB/2; //434;
+    parameter UART_FULL = CPB; //868;
+    // ADC
+    parameter adc_values_packet = 10; // the number of values to be sampled from the ADC
+    // FIFO
+    parameter DATA_WIDTH = 10;
+    parameter ADDR_WIDTH = adc_values_packet; // the length of the FIFO since the read is fatsre than the write it is okay to have it smaller than the samples count
     
     // clocks
     reg clk_100    = 0;
@@ -43,10 +38,7 @@ module top;
     // =========================================================================
     // ADC : a dummy ADC that generates a  signal at 10 bits at 60MHz 
     // =========================================================================
-    parameter CLK_PERIOD_adc = 17; // 60MHz = 16ps period
-    reg clk_adc    = 0;
-    always #(CLK_PERIOD_adc/2) clk_adc = ~clk_adc;
-    reg  [9:0] adc_data;
+    reg  [DATA_WIDTH-1:0] adc_data;
     reg enable_adc;
     
     adc adc_i (
@@ -77,13 +69,34 @@ module top;
 		);
 		
 		// =========================================================================
-    // FIFO
+    // a simple synchronizer for the reset signal on both sides of the fifo
+    // ========================================================================= 
+    reg [1:0] reset_60_sync;
+		
+		always @(posedge clk_60 or negedge reset) begin
+			if (!reset) reset_60_sync <= 2'b00;
+			else 				reset_60_sync <= {reset_60_sync[0], 1'b1};
+		end
+		wire reset_60_synced = reset_60_sync[1];
+		
+		reg [1:0] reset_100_sync;
+		always @(posedge clk_100 or negedge reset) begin
+			if (!reset) reset_100_sync <= 2'b00;
+			else 				reset_100_sync <= {reset_100_sync[0], 1'b1};
+		end
+		wire reset_100_synced = reset_100_sync[1];
+		
+		// =========================================================================
+    // FIFO : 
     // =========================================================================
-    parameter DATA_WIDTH = 10;
-    parameter ADDR_WIDTH = 100;
+    
 		wire fifo_full;
+		wire fifo_empty;
 		reg w_en;
+		reg r_en;
 		reg [DATA_WIDTH-1:0] wdata;
+		reg [DATA_WIDTH-1:0] rdata;
+		
 		async_fifo #(
 		  .DATA_WIDTH(DATA_WIDTH), //parameter DATA_WIDTH = 10,
 		  .ADDR_WIDTH(ADDR_WIDTH) //parameter ADDR_WIDTH = 4 // 2^4 = 16 locations
@@ -92,65 +105,120 @@ module top;
 		(
 				// Write Domain (60MHz)
 				.wclk(clk_60), //input  wire                   wclk,
-				.wrst_n(reset), //input  wire                   wrst_n,
+				.wrst_n(reset_60_synced), //input  wire                   wrst_n,
 				.w_en(w_en), //input  wire                   w_en,
 				.wdata(wdata), //input  wire [DATA_WIDTH-1:0]  wdata,
 				.full(fifo_full), //output wire                   full,
 
 				// Read Domain (100MHz)
-				.rclk(), //input  wire                   rclk,
-				.rrst_n(), //input  wire                   rrst_n,
-				.r_en(), //input  wire                   r_en,
-				.rdata(), //output wire [DATA_WIDTH-1:0]  rdata,
-				.empty() //output wire                   empty
+				.rclk(clk_100), //input  wire                   rclk,
+				.rrst_n(reset_100_synced), //input  wire                   rrst_n,
+				.r_en(r_en), //input  wire                   r_en,
+				.rdata(rdata), //output wire [DATA_WIDTH-1:0]  rdata,
+				.empty(fifo_empty) //output wire                   empty
 		);
 		
 		// =========================================================================
-    // Memory Management for data 
-    // =========================================================================
-		// logic part to enable the capture of 10000 value and put them into memory 
-		// memory to hold the 10k values at 10 bits 
-		parameter adc_values_packet = 10000;
-		reg [15:0] hypermem_fifo [adc_values_packet];
-		reg [2:0] mem_status;
-		reg [15:0] hypermem_fifo_counter;
+    // a simple synchronizer for the aquire signal to cross clock domains 100MHz to 60 MHz
+    // ========================================================================= 
+		reg sync1;
+		reg cmd_acquire_sync60;
+		always @(posedge clk_60) begin
+			sync1 <= cmd_acquire;
+			cmd_acquire_sync60 <= sync1;
+		end
+		
+		// =========================================================================
+    // Memory Management for data from ADC to memory : 60 mhz
+    // ========================================================================= 
+		
+		reg [2:0] mem_status_60;
+		reg [15:0] fifo_counter_60;
 		
 		typedef enum {IDLE= 3'b000, READ= 3'b001, CONVERT= 3'b010, WRITE= 3'b011} status;
 		
-		always @(posedge clk_60 or negedge reset) begin
-			if (!reset) begin
-				enable_adc<=0;
-				mem_status <= IDLE;
-				hypermem_fifo_counter <= 0;
+		always @(posedge clk_60 or negedge reset_60_synced) begin
+			if (!reset_60_synced) begin
+				enable_adc <= 0;
+				mem_status_60 <= IDLE;
+				fifo_counter_60 <= 0;
 			end
 				else begin
-				case (mem_status)
+				case (mem_status_60)
 					IDLE: begin // nothing just sit there waiting for the aquire signal
-						hypermem_fifo_counter <= 0;
+						fifo_counter_60 <= 0;
 						wdata <= 0;
 						w_en <= 0;
-						if (cmd_acquire) begin
-							// need to implment a waiting state until the adc wakes up
+						if (cmd_acquire_sync60) begin
+							// need to implment a waiting state until the adc wakes up (to be dfined by the ADC)
 							enable_adc <= 1; 
-							mem_status <= READ;
+							mem_status_60 <= READ;
 						end
 					end 
 					READ: begin
-						wdata <= adc_data;
-						w_en <= 1;
-						hypermem_fifo_counter <= hypermem_fifo_counter + 1;
-						if (hypermem_fifo_counter>adc_values_packet) begin
-							mem_status <= IDLE;
-							enable_adc <= 0; //disable the adc after 10k values captured
+						if (!fifo_full) begin
+							wdata <= adc_data;
+							w_en <= 1;
+							fifo_counter_60 <= fifo_counter_60 + 1;
+							if (fifo_counter_60 == adc_values_packet-1) begin
+								mem_status_60 <= IDLE;
+								enable_adc <= 0; //disable the adc after 10k values captured
+								w_en <= 0; // disbale the fifo write 
+								wdata <= 0;
+							end
+						end
+						else begin
 							w_en <= 0; // disbale the fifo write 
-							wdata <= 0;
 						end
 					end
-					default: mem_status <= IDLE;
+					default: mem_status_60 <= IDLE;
 				endcase
 			end
 		end
 		
+		// =========================================================================
+    // Memory Management for data from fifo to the hyper memory : 100 mhz
+    // ========================================================================= 
+		reg [15:0] hypermem_fifo [adc_values_packet];
+		reg [2:0] mem_status_100;
+		reg [15:0] fifo_counter_100;
+		reg        reading_active;
+		
+    always @(posedge clk_100 or negedge reset_100_synced) begin
+			if (!reset_100_synced) begin
+				r_en <= 0;
+        fifo_counter_100 <= 0;
+        reading_active <= 0;
+			end
+				else begin
+					r_en <= 0;
+					if (!fifo_empty && !reading_active) begin
+						r_en <= 1;
+						reading_active <= 1;
+					end
+					
+					if (reading_active) begin
+						hypermem_fifo[fifo_counter_100] <= rdata;
+						fifo_counter_100 <= fifo_counter_100 + 1;
+						reading_active <= 0;
+					end	
+			end
+		end
+		final begin
+			$writememh("memory_hyperout.hex", hypermem_fifo); // this is for checking hte adc out compared to the data saved to the memory 
+		end
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     
     // =========================================================================
@@ -225,22 +293,8 @@ module top;
 		  $finish;
     end
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-		
-		
 		// =========================================================================
-    // UART TX monitor — decodes serial from the real TX pad
+    // UART TX monitor 
     // =========================================================================
     reg uart_pad_tx; // uart rx pin
     integer uart_state = 0;
@@ -248,7 +302,7 @@ module top;
     integer uart_bit   = 0;
     reg [7:0] uart_byte = 0;
 
-    always @(posedge clk) begin
+    always @(posedge clk_100) begin
         case (uart_state)
             0: if (uart_pad_tx == 1'b0) begin
                 uart_state <= 1;
@@ -272,30 +326,14 @@ module top;
         endcase
     end
 
-		string vcd_file;
-		initial begin
-        //if (!$value$plusargs("MEM_FILE=%s", mem_file_padded))
-        //    mem_file_padded = "firmware.hex";
-        if (!$value$plusargs("VCD_FILE=%s", vcd_file))
-            vcd_file = "waves.vcd";
-        //mem_file = mem_file_padded[255:0];
-        //vcd_file = vcd_file_padded[255:0];
-    end
-    
-    // =========================================================================
-    // Clock & Reset
-    // =========================================================================
-    reg clk    = 0;
-    reg resetn = 0;
-    always #(CLK_PERIOD/2) clk = ~clk;
-    initial begin repeat(8) @(posedge clk); resetn = 1; end
-    //initial begin repeat(100) @(posedge clk); $finish; end
-    
     // =========================================================================
     // VCD
     // =========================================================================
+    string vcd_file;
     initial begin
         #1;
+      	if (!$value$plusargs("VCD_FILE=%s", vcd_file))
+            vcd_file = "waves.vcd";
         $dumpfile(vcd_file);
         $dumpvars(0, top);
     end
