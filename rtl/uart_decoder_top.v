@@ -13,6 +13,7 @@ module uart_decoder_top (
     output reg         rx_done_tick,
     input  wire [7:0]  tx_byte_in,
     input  wire        tx_start,
+    output wire        tx_busy,
 		
 		// decoder output
     output wire         cmd_acquire,  // High for 1 cycle on "acquire"
@@ -35,7 +36,8 @@ module uart_decoder_top (
 		  .rx_byte_out(rx_byte_out), //output reg  [7:0]  rx_byte_out,
 		  .rx_done_tick(rx_done_tick), //output reg         rx_done_tick,
 		  .tx_byte_in(tx_byte_in), //input  wire [7:0]  tx_byte_in,
-		  .tx_start(tx_start) //input  wire        tx_start
+		  .tx_start(tx_start), //input  wire        tx_start
+		  .tx_busy(tx_busy)
 		);
 		
 		// Monitor the Output
